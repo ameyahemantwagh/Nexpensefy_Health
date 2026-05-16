@@ -1,0 +1,250 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Kubernetes manifests for nexpensefy-health (AWS EKS)
+#
+# Apply:  kubectl apply -f deployment.yml -n nexpensefy
+# Delete: kubectl delete -f deployment.yml -n nexpensefy
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Namespace ─────────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: nexpensefy
+  labels:
+    app.kubernetes.io/name: nexpensefy-health
+
+---
+
+# ── ConfigMap (non-sensitive runtime config) ──────────────────────────────────
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nexpensefy-health-config
+  namespace: nexpensefy
+  labels:
+    app.kubernetes.io/name: nexpensefy-health
+data:
+  NODE_ENV: "production"
+  NEXT_TELEMETRY_DISABLED: "1"
+  PORT: "3000"
+  HOSTNAME: "0.0.0.0"
+
+---
+
+# ── Deployment ────────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nexpensefy-health
+  namespace: nexpensefy
+  labels:
+    app.kubernetes.io/name:    nexpensefy-health
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/part-of: nexpensefy
+spec:
+  replicas: 2                             # minimum HA pair; HPA handles scale-out
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app: nexpensefy-health
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0                   # zero-downtime deployments
+  template:
+    metadata:
+      labels:
+        app: nexpensefy-health
+        app.kubernetes.io/name: nexpensefy-health
+    spec:
+      # ── Security hardening ────────────────────────────────────────────
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser:    1001
+        runAsGroup:   1001
+        fsGroup:      1001
+        seccompProfile:
+          type: RuntimeDefault
+
+      # ── Graceful shutdown window ──────────────────────────────────────
+      terminationGracePeriodSeconds: 30
+
+      containers:
+        - name: nexpensefy-health
+          # IMAGE_URI:IMAGE_TAG is substituted by Jenkins at deploy time:
+          #   kubectl set image deployment/nexpensefy-health \
+          #     nexpensefy-health=<AWS_ACCOUNT_ID>.dkr.ecr.<REGION>.amazonaws.com/nexpensefy-health:<TAG>
+          image: PLACEHOLDER_ECR_URI:latest   # replaced by Jenkins pipeline
+          imagePullPolicy: Always
+
+          ports:
+            - name: http
+              containerPort: 3000
+              protocol: TCP
+
+          envFrom:
+            - configMapRef:
+                name: nexpensefy-health-config
+
+          # ── Resource limits ─────────────────────────────────────────
+          resources:
+            requests:
+              cpu:    "250m"
+              memory: "256Mi"
+            limits:
+              cpu:    "1000m"
+              memory: "512Mi"
+
+          # ── Probes ──────────────────────────────────────────────────
+          startupProbe:
+            httpGet:
+              path: /
+              port: 3000
+            initialDelaySeconds: 15
+            periodSeconds:       5
+            failureThreshold:    10        # 15 + 10*5 = 65 s max startup time
+
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 3000
+            initialDelaySeconds: 0
+            periodSeconds:       30
+            timeoutSeconds:      5
+            failureThreshold:    3
+
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 3000
+            initialDelaySeconds: 0
+            periodSeconds:       10
+            timeoutSeconds:      3
+            failureThreshold:    3
+
+          # ── Container security context ───────────────────────────────
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem:   true
+            capabilities:
+              drop: ["ALL"]
+
+          # ── Writable tmp for Next.js cache ───────────────────────────
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: next-cache
+              mountPath: /app/.next/cache
+
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: next-cache
+          emptyDir: {}
+
+---
+
+# ── Horizontal Pod Autoscaler ─────────────────────────────────────────────────
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: nexpensefy-health-hpa
+  namespace: nexpensefy
+  labels:
+    app.kubernetes.io/name: nexpensefy-health
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: nexpensefy-health
+  minReplicas: 2
+  maxReplicas: 6
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type:               Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type:               Utilization
+          averageUtilization: 80
+
+---
+
+# ── ClusterIP Service ─────────────────────────────────────────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: nexpensefy-health-svc
+  namespace: nexpensefy
+  labels:
+    app.kubernetes.io/name: nexpensefy-health
+spec:
+  type: ClusterIP
+  selector:
+    app: nexpensefy-health
+  ports:
+    - name: http
+      protocol: TCP
+      port: 80
+      targetPort: 3000
+
+---
+
+# ── Ingress (AWS Load Balancer Controller) ─────────────────────────────────────
+# Prerequisites:
+#   1. AWS Load Balancer Controller installed in the cluster
+#   2. A valid ACM certificate ARN for your domain
+#   3. Replace <YOUR_DOMAIN> and <YOUR_ACM_CERT_ARN> below
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: nexpensefy-health-ingress
+  namespace: nexpensefy
+  labels:
+    app.kubernetes.io/name: nexpensefy-health
+  annotations:
+    kubernetes.io/ingress.class:                    "alb"
+    alb.ingress.kubernetes.io/scheme:               "internet-facing"
+    alb.ingress.kubernetes.io/target-type:          "ip"
+    alb.ingress.kubernetes.io/listen-ports:         '[{"HTTP":80},{"HTTPS":443}]'
+    alb.ingress.kubernetes.io/ssl-redirect:         "443"
+    # Replace with your ACM certificate ARN:
+    alb.ingress.kubernetes.io/certificate-arn:      "arn:aws:acm:<REGION>:<ACCOUNT_ID>:certificate/<CERT_ID>"
+    alb.ingress.kubernetes.io/healthcheck-path:     "/"
+    alb.ingress.kubernetes.io/healthcheck-interval-seconds: "30"
+    alb.ingress.kubernetes.io/success-codes:        "200-299"
+spec:
+  rules:
+    - host: <YOUR_DOMAIN>          # e.g. nexpensefy.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: nexpensefy-health-svc
+                port:
+                  number: 80
+
+---
+
+# ── PodDisruptionBudget ───────────────────────────────────────────────────────
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: nexpensefy-health-pdb
+  namespace: nexpensefy
+  labels:
+    app.kubernetes.io/name: nexpensefy-health
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: nexpensefy-health
