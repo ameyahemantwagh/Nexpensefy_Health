@@ -1,10 +1,20 @@
 pipeline {
     agent any
 
+    // ── GitHub source of truth ────────────────────────────────────────────
+    // Jenkins credential ID that holds your GitHub PAT (or SSH key).
+    // Add it under: Manage Jenkins → Credentials → Global → Add Credentials
+    //   Kind : Username with password  (username = GitHub username, password = PAT)
+    //   ID   : GITHUB_CREDENTIALS
     environment {
+        // ── GitHub ────────────────────────────────────────────────────
+        GITHUB_REPO_URL    = 'https://github.com/<YOUR_GITHUB_USERNAME>/nexpensefy-health.git'
+        GITHUB_BRANCH      = 'main'                                     // branch to build & deploy
+        GITHUB_CREDENTIALS = 'GITHUB_CREDENTIALS'                       // Jenkins credential ID
+
         // ── AWS / ECR ──────────────────────────────────────────────────
         AWS_REGION         = 'us-east-1'
-        AWS_ACCOUNT_ID     = credentials('AWS_ACCOUNT_ID')          // Jenkins secret: plain text
+        AWS_ACCOUNT_ID     = credentials('AWS_ACCOUNT_ID')              // Jenkins secret: plain text
         ECR_REPO_NAME      = 'nexpensefy-health'
         ECR_REGISTRY       = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
         IMAGE_URI          = "${ECR_REGISTRY}/${ECR_REPO_NAME}"
@@ -18,6 +28,11 @@ pipeline {
         IMAGE_TAG          = "${env.BUILD_NUMBER}-${env.GIT_COMMIT?.take(7) ?: 'latest'}"
     }
 
+    // ── Trigger: rebuild automatically on every push to GITHUB_BRANCH ──
+    triggers {
+        githubPush()
+    }
+
     options {
         buildDiscarder(logRotator(numToKeepStr: '10'))
         timestamps()
@@ -26,10 +41,16 @@ pipeline {
     }
 
     stages {
-        // ── 1. Checkout ───────────────────────────────────────────────
+        // ── 1. Checkout from GitHub ───────────────────────────────────
         stage('Checkout') {
             steps {
-                checkout scm
+                git(
+                    url:           env.GITHUB_REPO_URL,
+                    branch:        env.GITHUB_BRANCH,
+                    credentialsId: env.GITHUB_CREDENTIALS,
+                    changelog:     true,
+                    poll:          true
+                )
                 echo "Branch: ${env.GIT_BRANCH}  |  Commit: ${env.GIT_COMMIT}"
             }
         }

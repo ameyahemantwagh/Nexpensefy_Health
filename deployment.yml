@@ -1,8 +1,17 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # Kubernetes manifests for nexpensefy-health (AWS EKS)
 #
-# Apply:  kubectl apply -f deployment.yml -n nexpensefy
-# Delete: kubectl delete -f deployment.yml -n nexpensefy
+# Source:  https://github.com/<YOUR_GITHUB_USERNAME>/nexpensefy-health
+# Branch:  main  (Jenkins clones this repo before applying the manifest)
+#
+# The Jenkins pipeline clones the repo, builds & pushes the Docker image to
+# ECR, then runs:
+#   kubectl apply -f deployment.yml -n nexpensefy
+#   kubectl set image deployment/nexpensefy-health \
+#       nexpensefy-health=<ECR_URI>:<BUILD>-<SHA>
+#
+# Manual apply:  kubectl apply  -f deployment.yml -n nexpensefy
+# Manual delete: kubectl delete -f deployment.yml -n nexpensefy
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ── Namespace ─────────────────────────────────────────────────────────────────
