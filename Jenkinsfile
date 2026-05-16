@@ -1,6 +1,11 @@
 pipeline {
     agent any
 
+    parameters {
+        string(name: 'AWS_CREDENTI ', defaultValue: '', description: 'Optional Jenkins Secret Text credential ID for AWS_ACCESS_KEY_ID')
+        string(name: 'AWS_SECRET_ACCESS_KEY_CRED', defaultValue: '', description: 'Optional Jenkins Secret Text credential ID for AWS_SECRET_ACCESS_KEY')
+    }
+
     // ── GitHub source of truth ────────────────────────────────────────────
     // Jenkins credential ID that holds your GitHub PAT (or SSH key).
     // Add it under: Manage Jenkins → Credentials → Global → Add Credentials
@@ -100,14 +105,8 @@ pipeline {
         // ── 4. Docker Build & Push to ECR ─────────────────────────────
         stage('Docker Build & Push') {
             steps {
-                withCredentials([
-                    usernamePassword(
-                        credentialsId: 'AWS_CREDENTIALS',
-                        usernameVariable: 'AWS_ACCESS_KEY_ID',
-                        passwordVariable: 'AWS_SECRET_ACCESS_KEY'
-                    )
-                ]) {
-                    sh '''
+                script {
+                    def pushCmd = '''
                         # Authenticate Docker to ECR
                         aws ecr get-login-password \
                             --region "$AWS_REGION" | \
@@ -129,6 +128,73 @@ pipeline {
 
                         echo "Pushed $IMAGE_URI:$IMAGE_TAG"
                     '''
+
+                    boolean usedBoundCreds = false
+                    boolean usedInstanceRole = false
+                    if (params.AWS_CREDENTIALS_ID?.trim()) {
+                        echo "Trying AWS credentials ID: ${params.AWS_CREDENTIALS_ID}"
+                        try {
+                            withCredentials([
+                                usernamePassword(
+                                    credentialsId: params.AWS_CREDENTIALS_ID,
+                                    usernameVariable: 'AWS_ACCESS_KEY_ID',
+                                    passwordVariable: 'AWS_SECRET_ACCESS_KEY'
+                                )
+                            ]) {
+                                usedBoundCreds = true
+                                sh pushCmd
+                            }
+                        } catch (Exception ex) {
+                            echo "Could not use Jenkins credential ID '${params.AWS_CREDENTIALS_ID}'. Falling back to pre-set environment variables."
+                            echo "Reason: ${ex.getMessage()}"
+                        }
+                    }
+
+                    if (!usedBoundCreds && params.AWS_ACCESS_KEY_ID_CRED?.trim() && params.AWS_SECRET_ACCESS_KEY_CRED?.trim()) {
+                        echo "Trying AWS secret text credentials IDs: ${params.AWS_ACCESS_KEY_ID_CRED} and ${params.AWS_SECRET_ACCESS_KEY_CRED}"
+                        try {
+                            withCredentials([
+                                string(credentialsId: params.AWS_ACCESS_KEY_ID_CRED, variable: 'AWS_ACCESS_KEY_ID'),
+                                string(credentialsId: params.AWS_SECRET_ACCESS_KEY_CRED, variable: 'AWS_SECRET_ACCESS_KEY')
+                            ]) {
+                                usedBoundCreds = true
+                                sh pushCmd
+                            }
+                        } catch (Exception ex) {
+                            echo "Could not use AWS secret text credential IDs."
+                            echo "Reason: ${ex.getMessage()}"
+                        }
+                    }
+
+                    if (!usedBoundCreds) {
+                        // If Jenkins node is on AWS with IAM role attached, AWS CLI can authenticate without static keys.
+                        def roleCheck = sh(script: 'aws sts get-caller-identity >/dev/null 2>&1', returnStatus: true)
+                        if (roleCheck == 0) {
+                            echo 'Using IAM role credentials from Jenkins node (aws sts get-caller-identity succeeded).'
+                            usedInstanceRole = true
+                            sh pushCmd
+                        } else {
+                            sh '''
+                                if [ -z "$AWS_ACCESS_KEY_ID" ] || [ -z "$AWS_SECRET_ACCESS_KEY" ]; then
+                                    echo "ERROR: AWS credentials are not available."
+                                    echo "Provide one of the following in Jenkins:"
+                                    echo "1) AWS_CREDENTIALS_ID (Username/Password), or"
+                                    echo "2) AWS_ACCESS_KEY_ID_CRED + AWS_SECRET_ACCESS_KEY_CRED (Secret Text), or"
+                                    echo "3) IAM role on Jenkins node with ECR/EKS permissions."
+                                    exit 1
+                                fi
+                            '''
+                            sh pushCmd
+                        }
+                    }
+
+                    if (usedBoundCreds) {
+                        echo 'AWS authentication mode: Jenkins credentials binding.'
+                    } else if (usedInstanceRole) {
+                        echo 'AWS authentication mode: IAM role on Jenkins node.'
+                    } else {
+                        echo 'AWS authentication mode: pre-set environment variables.'
+                    }
                 }
             }
         }
@@ -136,14 +202,8 @@ pipeline {
         // ── 5. Deploy to EKS ──────────────────────────────────────────
         stage('Deploy to EKS') {
             steps {
-                withCredentials([
-                    usernamePassword(
-                        credentialsId: 'AWS_CREDENTIALS',
-                        usernameVariable: 'AWS_ACCESS_KEY_ID',
-                        passwordVariable: 'AWS_SECRET_ACCESS_KEY'
-                    )
-                ]) {
-                    sh '''
+                script {
+                    def deployCmd = '''
                         # Update kubeconfig for the target cluster
                         aws eks update-kubeconfig \
                             --region "$AWS_REGION" \
@@ -167,6 +227,70 @@ pipeline {
                             --namespace "$K8S_NAMESPACE" \
                             --timeout=300s
                     '''
+
+                    boolean usedBoundCreds = false
+                    boolean usedInstanceRole = false
+                    if (params.AWS_CREDENTIALS_ID?.trim()) {
+                        try {
+                            withCredentials([
+                                usernamePassword(
+                                    credentialsId: params.AWS_CREDENTIALS_ID,
+                                    usernameVariable: 'AWS_ACCESS_KEY_ID',
+                                    passwordVariable: 'AWS_SECRET_ACCESS_KEY'
+                                )
+                            ]) {
+                                usedBoundCreds = true
+                                sh deployCmd
+                            }
+                        } catch (Exception ex) {
+                            echo "Could not use Jenkins credential ID '${params.AWS_CREDENTIALS_ID}' for deploy. Falling back to pre-set environment variables."
+                            echo "Reason: ${ex.getMessage()}"
+                        }
+                    }
+
+                    if (!usedBoundCreds && params.AWS_ACCESS_KEY_ID_CRED?.trim() && params.AWS_SECRET_ACCESS_KEY_CRED?.trim()) {
+                        try {
+                            withCredentials([
+                                string(credentialsId: params.AWS_ACCESS_KEY_ID_CRED, variable: 'AWS_ACCESS_KEY_ID'),
+                                string(credentialsId: params.AWS_SECRET_ACCESS_KEY_CRED, variable: 'AWS_SECRET_ACCESS_KEY')
+                            ]) {
+                                usedBoundCreds = true
+                                sh deployCmd
+                            }
+                        } catch (Exception ex) {
+                            echo "Could not use AWS secret text credential IDs for deploy."
+                            echo "Reason: ${ex.getMessage()}"
+                        }
+                    }
+
+                    if (!usedBoundCreds) {
+                        def roleCheck = sh(script: 'aws sts get-caller-identity >/dev/null 2>&1', returnStatus: true)
+                        if (roleCheck == 0) {
+                            echo 'Using IAM role credentials from Jenkins node for deploy.'
+                            usedInstanceRole = true
+                            sh deployCmd
+                        } else {
+                            sh '''
+                                if [ -z "$AWS_ACCESS_KEY_ID" ] || [ -z "$AWS_SECRET_ACCESS_KEY" ]; then
+                                    echo "ERROR: AWS credentials are not available for deploy."
+                                    echo "Provide one of the following in Jenkins:"
+                                    echo "1) AWS_CREDENTIALS_ID (Username/Password), or"
+                                    echo "2) AWS_ACCESS_KEY_ID_CRED + AWS_SECRET_ACCESS_KEY_CRED (Secret Text), or"
+                                    echo "3) IAM role on Jenkins node with ECR/EKS permissions."
+                                    exit 1
+                                fi
+                            '''
+                            sh deployCmd
+                        }
+                    }
+
+                    if (usedBoundCreds) {
+                        echo 'AWS deploy authentication mode: Jenkins credentials binding.'
+                    } else if (usedInstanceRole) {
+                        echo 'AWS deploy authentication mode: IAM role on Jenkins node.'
+                    } else {
+                        echo 'AWS deploy authentication mode: pre-set environment variables.'
+                    }
                 }
             }
         }

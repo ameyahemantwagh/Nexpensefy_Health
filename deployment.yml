@@ -210,7 +210,7 @@ spec:
 # Prerequisites:
 #   1. AWS Load Balancer Controller installed in the cluster
 #   2. A valid ACM certificate ARN for your domain
-#   3. Replace <YOUR_DOMAIN> and <YOUR_ACM_CERT_ARN> below
+#   3. Replace <YOUR_ACM_CERT_ARN> below
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -231,8 +231,7 @@ metadata:
     alb.ingress.kubernetes.io/success-codes:        "200-299"
 spec:
   rules:
-    - host: <YOUR_DOMAIN>          # e.g. nexpensefy.example.com
-      http:
+    - http:
         paths:
           - path: /
             pathType: Prefix
