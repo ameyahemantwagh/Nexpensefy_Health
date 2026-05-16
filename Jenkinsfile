@@ -8,14 +8,14 @@ pipeline {
     //   ID   : GITHUB_CREDENTIALS
     environment {
         // ── GitHub ────────────────────────────────────────────────────
-        GITHUB_REPO_URL    = 'https://github.com/<YOUR_GITHUB_USERNAME>/nexpensefy-health.git'
+        GITHUB_REPO_URL    = 'https://github.com/bhagyashreeameyawagh-ai/Nexpensefy_Health.git'
         GITHUB_BRANCH      = 'main'                                     // branch to build & deploy
-        GITHUB_CREDENTIALS = 'GITHUB_CREDENTIALS'                       // Jenkins credential ID
+        GITHUB_CREDENTIALS = 'Finalproject'                             // Jenkins credential ID
 
         // ── AWS / ECR ──────────────────────────────────────────────────
-        AWS_REGION         = 'us-east-1'
-        AWS_ACCOUNT_ID     = credentials('AWS_ACCOUNT_ID')              // Jenkins secret: plain text
-        ECR_REPO_NAME      = 'nexpensefy-health'
+        AWS_REGION         = 'ap-south-1'
+        AWS_ACCOUNT_ID     = '041568220769'                           // AWS account ID (plain value)
+        ECR_REPO_NAME      = 'nexpensefy_health'
         ECR_REGISTRY       = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
         IMAGE_URI          = "${ECR_REGISTRY}/${ECR_REPO_NAME}"
 
@@ -25,7 +25,7 @@ pipeline {
         K8S_DEPLOYMENT     = 'nexpensefy-health'
 
         // ── Build metadata ────────────────────────────────────────────
-        IMAGE_TAG          = "${env.BUILD_NUMBER}-${env.GIT_COMMIT?.take(7) ?: 'latest'}"
+        IMAGE_TAG          = 'latest'
     }
 
     // ── Trigger: rebuild automatically on every push to GITHUB_BRANCH ──
@@ -55,35 +55,44 @@ pipeline {
             }
         }
 
-        // ── 2. Install & Lint ─────────────────────────────────────────
-        stage('Install & Lint') {
-            agent {
-                docker {
-                    image 'node:22-alpine'
-                    args  '-u root'
-                    reuseNode true
+        // ── 1.1 Resolve image tag from checked-out commit ───────────
+        stage('Prepare Metadata') {
+            steps {
+                script {
+                    def shortCommit = sh(script: 'git rev-parse --short=7 HEAD', returnStdout: true).trim()
+                    env.IMAGE_TAG = "${env.BUILD_NUMBER}-${shortCommit}"
+                    echo "Resolved IMAGE_TAG=${env.IMAGE_TAG}"
                 }
             }
+        }
+
+        // ── 2. Install & Lint ─────────────────────────────────────────
+        stage('Install & Lint') {
             steps {
-                sh 'npm ci'
-                sh 'npm run lint'
+                sh '''
+                    docker run --rm \
+                        -v "$PWD:/app" \
+                        -w /app \
+                        node:22-alpine \
+                        sh -lc "npm ci && npm run lint"
+                '''
             }
         }
 
         // ── 3. Build (Next.js) ────────────────────────────────────────
         stage('Build') {
-            agent {
-                docker {
-                    image 'node:22-alpine'
-                    args  '-u root'
-                    reuseNode true
-                }
-            }
             environment {
                 NEXT_TELEMETRY_DISABLED = '1'
             }
             steps {
-                sh 'npm run build'
+                sh '''
+                    docker run --rm \
+                        -e NEXT_TELEMETRY_DISABLED=1 \
+                        -v "$PWD:/app" \
+                        -w /app \
+                        node:22-alpine \
+                        sh -lc "npm ci && npm run build"
+                '''
                 echo 'Next.js build succeeded.'
             }
         }
@@ -92,12 +101,11 @@ pipeline {
         stage('Docker Build & Push') {
             steps {
                 withCredentials([
-                    [
-                        $class:            'AmazonWebServicesCredentialsBinding',
-                        credentialsId:     'AWS_CREDENTIALS',
-                        accessKeyVariable: 'AWS_ACCESS_KEY_ID',
-                        secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
-                    ]
+                    usernamePassword(
+                        credentialsId: 'AWS_CREDENTIALS',
+                        usernameVariable: 'AWS_ACCESS_KEY_ID',
+                        passwordVariable: 'AWS_SECRET_ACCESS_KEY'
+                    )
                 ]) {
                     sh '''
                         # Authenticate Docker to ECR
@@ -129,12 +137,11 @@ pipeline {
         stage('Deploy to EKS') {
             steps {
                 withCredentials([
-                    [
-                        $class:            'AmazonWebServicesCredentialsBinding',
-                        credentialsId:     'AWS_CREDENTIALS',
-                        accessKeyVariable: 'AWS_ACCESS_KEY_ID',
-                        secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
-                    ]
+                    usernamePassword(
+                        credentialsId: 'AWS_CREDENTIALS',
+                        usernameVariable: 'AWS_ACCESS_KEY_ID',
+                        passwordVariable: 'AWS_SECRET_ACCESS_KEY'
+                    )
                 ]) {
                     sh '''
                         # Update kubeconfig for the target cluster
@@ -171,29 +178,11 @@ pipeline {
             echo "Deployment of ${IMAGE_URI}:${IMAGE_TAG} succeeded."
         }
         failure {
-            echo "Pipeline failed. Rolling back deployment..."
-            withCredentials([
-                [
-                    $class:            'AmazonWebServicesCredentialsBinding',
-                    credentialsId:     'AWS_CREDENTIALS',
-                    accessKeyVariable: 'AWS_ACCESS_KEY_ID',
-                    secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
-                ]
-            ]) {
-                sh '''
-                    aws eks update-kubeconfig \
-                        --region "$AWS_REGION" \
-                        --name   "$EKS_CLUSTER_NAME" 2>/dev/null || true
-
-                    kubectl rollout undo deployment/"$K8S_DEPLOYMENT" \
-                        --namespace "$K8S_NAMESPACE" 2>/dev/null || true
-                '''
-            }
+            echo "Pipeline failed. Skipping rollback in post block to avoid missing node/workspace context."
+            echo "If needed, rollback manually: kubectl rollout undo deployment/${env.K8S_DEPLOYMENT} -n ${env.K8S_NAMESPACE}"
         }
         always {
-            // Clean up dangling local images to save disk space
-            sh 'docker image prune -f || true'
-            cleanWs()
+            echo 'Post cleanup step skipped (node/workspace may be unavailable on early pipeline failures).'
         }
     }
 }

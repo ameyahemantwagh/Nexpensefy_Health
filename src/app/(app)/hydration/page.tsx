@@ -90,7 +90,7 @@ export default function HydrationPage() {
           {/* Today's log */}
           {todayEntry && todayEntry.logs.length > 0 && (
             <div className="w-full max-w-sm space-y-1.5">
-              <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-2">Today's Log</p>
+              <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-2">Today&apos;s Log</p>
               {[...todayEntry.logs].reverse().map((log, i) => (
                 <div key={i} className="flex justify-between text-sm bg-slate-50 px-3 py-2 rounded-lg">
                   <span className="text-slate-600">{log.time}</span>

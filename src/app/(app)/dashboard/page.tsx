@@ -77,7 +77,7 @@ export default function DashboardPage() {
           Good {getGreeting()},{" "}
           <span className="text-emerald-600">{profile.name || "there"}</span> 👋
         </h1>
-        <p className="text-slate-500 text-sm mt-1">{formatDate(new Date())} · Here's your health snapshot</p>
+        <p className="text-slate-500 text-sm mt-1">{formatDate(new Date())} · Here&apos;s your health snapshot</p>
       </div>
 
       {/* Top KPI row */}
@@ -156,7 +156,7 @@ export default function DashboardPage() {
         {/* Macros card */}
         <Card>
           <CardHeader>
-            <CardTitle>Today's Macros</CardTitle>
+            <CardTitle>Today&apos;s Macros</CardTitle>
             <CardDescription>vs. daily targets</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -249,7 +249,7 @@ export default function DashboardPage() {
       <Card>
         <CardHeader className="flex flex-row items-center justify-between">
           <div>
-            <CardTitle>Today's Meals</CardTitle>
+            <CardTitle>Today&apos;s Meals</CardTitle>
             <CardDescription>{todayMeals.length} entries logged</CardDescription>
           </div>
           <Utensils className="w-5 h-5 text-slate-400" />
@@ -343,7 +343,7 @@ function QuickTips({
     <Card className="border-emerald-100 bg-emerald-50/30">
       <CardHeader>
         <CardTitle className="text-emerald-700 flex items-center gap-2">
-          <Target className="w-4 h-4" /> Today's Insights
+          <Target className="w-4 h-4" /> Today&apos;s Insights
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-2">
