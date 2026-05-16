@@ -195,7 +195,7 @@ metadata:
   labels:
     app.kubernetes.io/name: nexpensefy-health
 spec:
-  type: ClusterIP
+  type: LoadBalancer
   selector:
     app: nexpensefy-health
   ports:
