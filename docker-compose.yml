@@ -1,0 +1,19 @@
+services:
+  nutritrack:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: nutritrack-health:latest
+    container_name: nutritrack-health
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - NEXT_TELEMETRY_DISABLED=1
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
